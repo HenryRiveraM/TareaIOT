@@ -1,0 +1,125 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+// Constantes de configuración de red
+const char* WIFI_SSID = "TECHLAB";
+const char* WIFI_PASS = "catolica11";
+const char* MQTT_BROKER_HOST = "broker.hivemq.com";
+const int MQTT_BROKER_PORT = 1883;
+
+// Constantes de configuración MQTT
+const char* MQTT_CLIENT_ID = "grupo11_iot";    
+const char* PUBLISH_TOPIC = "iot/ucb/gamboa";
+const char* SUBSCRIBE_TOPIC = "iot/ucb/gamboa";
+
+// Pines de hardware
+const int TRIGGER_PIN = 18;
+const int ECHO_PIN = 19;
+const int LED_AMARILLO = 33;
+const int LED_ROJO = 32;
+
+// Variables de control
+WiFiClient wiFiClient;
+PubSubClient mqttClient(wiFiClient);
+unsigned long previousPublishMillis = 0;
+bool systemActive = false;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(TRIGGER_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(LED_AMARILLO, OUTPUT);
+  pinMode(LED_ROJO, OUTPUT);
+
+  connectWiFi();
+  connectMQTT();
+}
+
+void loop() {
+  if (mqttClient.connected()) {
+    mqttClient.loop();
+    if (systemActive) {
+      checkAndControlSystem();
+    }
+  } else {
+    reconnectMQTT();
+  }
+}
+
+void connectWiFi() {
+  Serial.print("Conectando a ");
+  Serial.print(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(200);
+    Serial.print(".");
+  }
+  Serial.println(" Conectado!");
+}
+
+void connectMQTT() {
+  mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
+  Serial.print("Conectando a ");
+  Serial.print(MQTT_BROKER_HOST);
+  if (mqttClient.connect(MQTT_CLIENT_ID)) {
+    Serial.println(" Conectado!");
+    mqttClient.subscribe(SUBSCRIBE_TOPIC);
+  } else {
+    Serial.println(" Falló la conexión MQTT!");
+  }
+}
+
+void reconnectMQTT() {
+  if (!mqttClient.connected()) {
+    connectMQTT();
+  }
+}
+
+void checkAndControlSystem() {
+  unsigned long now = millis();
+  if (now - previousPublishMillis >= 2000) {
+    previousPublishMillis = now;
+    long distance = measureDistance();
+    controlLEDs(distance);
+    String message = String(distance) + " cm";
+    mqttClient.publish(PUBLISH_TOPIC, message.c_str());
+  }
+}
+
+long measureDistance() {
+  digitalWrite(TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIGGER_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIGGER_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH);
+  return (duration / 2) / 29.1;
+}
+
+void controlLEDs(long distance) {
+  Serial.print("Distancia medida: ");
+  Serial.println(distance);
+  
+  digitalWrite(LED_AMARILLO, distance < 15);
+  digitalWrite(LED_ROJO, distance >= 15 && distance < 100);
+  
+  Serial.print("LED amarillo: ");
+  Serial.println(distance < 15);
+  Serial.print("LED rojo: ");
+  Serial.println(distance >= 15);
+}
+
+void callback(const char* topic, byte* payload, unsigned int length) {
+  String message;
+  for (int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  Serial.println("Mensaje de " + String(topic) + ": " + message);
+  if (message == "LED_ON") {
+    systemActive = true;
+  } else if (message == "LED_OFF") {
+    systemActive = false;
+    digitalWrite(LED_AMARILLO, LOW);
+    digitalWrite(LED_ROJO, LOW);
+  }
+}
